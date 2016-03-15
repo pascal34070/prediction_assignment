@@ -1,0 +1,137 @@
+---
+title: "Prediction assigment"
+author: "Pierrot Pascal"
+date: "15 mars 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+# Introduction
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.
+In this project, we will want to predict the manner in which they did the exercise. This is the "classe" variable in the training set.
+
+Data sets which will be used are taken from this url :
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+
+# Data exploratory analysis and cleaning
+
+In order to clean the data set , we first have a quick look to the training data
+
+
+```{r , echo=TRUE}
+dat= as.data.frame(read.csv("training.csv"))
+head(dat, n=1)
+```
+
+We can see that there are NA values and empty spaces. Thus, we omit these values. Beside, many non-numeric variables such as user names or timestamp are not workable for our model, so we decide to remove them from the dataset. We remove also columns in which there are NA values.
+
+```{r , echo=TRUE}
+data1 = read.csv("training.csv", na.strings=c("NA",""), strip.white=TRUE)
+data2 = as.data.frame(data1)
+data3 = subset(data2, select = -c(X, user_name, raw_timestamp_part_1,
+raw_timestamp_part_2, cvtd_timestamp, new_window, num_window))
+haveNA = apply(data3,2,  function(x) {sum(is.na(x))})
+data4 = data3[,which(haveNA==0)]
+```
+
+# Creating data partitions
+
+In order to use cross validation for our model, the training data set is splitd into one training (3/4 of data) set and one cross-validation set (1/4 of data). The cross-validation set will help us to see how the model performs on a new dataset and prevent overfitting.
+
+```{r , echo=TRUE}
+library(caret)
+inTrain = createDataPartition(data4$classe, p = 0.75, list = FALSE)
+training = data4[inTrain,]
+testing = data4[-inTrain,]
+```
+
+# Dimension reduction using PCA
+
+In this section, we will preprocess data by using PCA in order to simplify the analysis and interpretation.
+First, we check the existence of possible correlations between variables by computing the correlation matrix.
+```{r , echo=TRUE}
+##seeking strong correlation between variables
+M = abs(cor(training[,-53]))
+diag(M) = 0
+head(which(M>0.9, arr.ind = T), n=7)
+```
+
+We can see that there are many correlations between some variables. Thus, it is relevant to perform a PCA with the preprocessing command.
+
+```{r , echo=TRUE}
+preProc = preProcess(training[,-53], method = "pca", thresh = 0.9)
+train = predict(preProc, training[,-53])
+test = predict(preProc, testing[,-53])
+dim(train)
+```
+
+The PCA method has kept 18 variables from the data set. Once we have our training set "train" and cross-validation set "test" we can begin our model selection
+
+# First model with decision trees
+
+In this section, a first quick model will be implemented using a simple decision tree with 
+
+
+```{r, echo=TRUE}
+library(rpart)
+library(rpart.plot)
+treeModel = rpart(training$classe~., data = train, method = "class")
+predTest = predict(treeModel, test, type = "class")
+predTrain = predict(treeModel, train, type = "class")
+confusionMatrix(testing$classe, predTest)
+confusionMatrix(training$classe, predTrain)
+```
+
+When we apply the model to predict the cross-validation, we notice an accuracy of 0.4718 on the training set and an accuracy of 0.4572 on the cross-validation set. These values are not satisfying and we will want a better method.
+The following figure shows the tree generated with the model.
+
+```{r, echo=TRUE}
+rpart.plot(treeModel, main ="decision tree ")
+```
+
+# A second approach using random forest
+
+In order to improve the accuracy result, a random forest method will be fitted. The asset of such a method is that it will use several trees on differents sample of the training set and will proceed to a majority vote. Thus, we expected to have a better accuracy with this method.
+
+```{r, echo=TRUE}
+
+library(randomForest)
+ctrl <- trainControl(allowParallel=T, method="cv", number=4)
+rfmodel = train(training$classe~., data = train, method = "rf", trControl=ctrl)
+rfpredTest = predict(rfmodel, newdata = test)
+confusionMatrix(rfpredTest, testing$classe)
+```
+
+The model performs an accuracy of 0.9739 on the cross-validation set (with a 95% confidence of 0.969-0.9782). The sensitivity and specificity values are also satisfying. This is far more efficient than the decision tree model. Nevertheless, it takes to long to train the model. This is the reason why I chose to use a train control with a limitation of the number of resampling (limited to 4).
+
+# Cases prediction
+
+## Using decision trees
+```{r, echo=TRUE}
+testdata = read.csv("testing.csv", na.strings=c("NA",""), strip.white=T)
+usernames = testdata$user_name ##will be usefull for the continuation
+ntestdata = subset(testdata, select = -c(X, user_name, raw_timestamp_part_1,
+                                raw_timestamp_part_2, cvtd_timestamp, new_window, num_window))
+predtestn = predict(preProc, ntestdata) ##pre-process
+p=predict(treeModel, predtestn)
+data.frame(usernames, p)
+```
+
+## Using random forest
+
+```{r, echo=TRUE}
+predCase = predict(rfmodel, predtestn)
+result = data.frame(usernames, predCase)
+result
+```
+
+
+# Conclusion
+
+Using a random forest was far more interesting in our case because it provides a better accuracy. Owing to the high number of variables and the presence of possible correlations, I decided to perform a dimension reduction first. The asset of this step is that it makes the interpretation and the analysis of the output decision tree easier. Nevertheless, dimension reduction like PCA remove information and this might have led to worse results with decision tree methods. 
